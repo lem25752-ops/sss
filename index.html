@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>절대 깨어나는 미션 알람</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Orbitron:wght@700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #f8fafc;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        .clock-font { font-family: 'Orbitron', sans-serif; }
+        .glass-morphism {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .mission-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            background: rgba(15, 23, 42, 0.95);
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        .moving-target {
+            transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes pulse-red {
+            0% { background-color: rgba(239, 68, 68, 0.1); }
+            50% { background-color: rgba(239, 68, 68, 0.4); }
+            100% { background-color: rgba(239, 68, 68, 0.1); }
+        }
+        .alarm-active {
+            animation: pulse-red 1s infinite;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center p-4">
+
+    <div id="mainDashboard" class="w-full max-w-md p-8 rounded-3xl glass-morphism text-center">
+        <h1 class="text-xl font-semibold mb-2 opacity-70">현재 시간</h1>
+        <div id="currentTime" class="clock-font text-5xl md:text-6xl font-bold mb-8 text-blue-400">00:00:00</div>
+
+        <div class="space-y-6">
+            <div class="flex flex-col items-center">
+                <label class="text-sm mb-2 opacity-60">알람 설정</label>
+                <input type="time" id="alarmTime" 
+                    class="bg-slate-800 text-white text-3xl p-4 rounded-2xl border-2 border-blue-500/30 focus:border-blue-500 outline-none transition-all">
+            </div>
+
+            <button id="setAlarmBtn" 
+                class="w-full py-4 bg-blue-600 hover:bg-blue-500 active:scale-95 transition-all rounded-2xl font-bold text-lg shadow-lg shadow-blue-900/20">
+                알람 시작하기
+            </button>
+
+            <div id="statusMessage" class="text-sm text-slate-400 min-h-[1.5rem]">
+                알람을 설정해주세요
+            </div>
+        </div>
+    </div>
+
+    <div id="missionLayer" class="mission-overlay p-6 text-center">
+        <div id="missionContainer" class="w-full max-w-sm">
+            <!-- 미션 1: 수학 문제 -->
+            <div id="mathMission" class="space-y-6">
+                <h2 class="text-3xl font-black text-red-500 mb-2">정신 번쩍 미션 1</h2>
+                <p class="text-slate-300">문제를 풀어서 뇌를 깨우세요! (남은 문제: <span id="mathLeft">3</span>)</p>
+                <div id="mathQuestion" class="clock-font text-4xl py-6 bg-slate-800 rounded-2xl border border-slate-700">
+                    12 + 45 = ?
+                </div>
+                <div class="grid grid-cols-2 gap-3" id="mathOptions">
+                    <!-- JS에서 버튼 생성 -->
+                </div>
+            </div>
+
+            <!-- 미션 2: 타겟 클릭 -->
+            <div id="clickMission" class="hidden space-y-6">
+                <h2 class="text-3xl font-black text-yellow-500 mb-2">정신 번쩍 미션 2</h2>
+                <p class="text-slate-300">움직이는 공을 5번 클릭하세요!</p>
+                <div class="relative w-full h-64 bg-slate-800 rounded-3xl overflow-hidden mt-4 border border-slate-700" id="gameArea">
+                    <button id="targetCircle" class="moving-target absolute w-12 h-12 bg-yellow-400 rounded-full shadow-lg shadow-yellow-500/50 flex items-center justify-center text-slate-900 font-bold">
+                        HIT
+                    </button>
+                </div>
+                <div class="text-xl font-bold">진행도: <span id="clickCount">0</span> / 5</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let alarmTime = null;
+        let isAlarmRunning = false;
+        let isAlarmActive = false;
+        let mathQuestionsSolved = 0;
+        const totalMathQuestions = 3;
+        let targetClicks = 0;
+        const totalClicks = 5;
+
+        // 사운드 관련
+        let synth = null;
+        let alarmInterval = null;
+
+        const timeDisplay = document.getElementById('currentTime');
+        const alarmInput = document.getElementById('alarmTime');
+        const setBtn = document.getElementById('setAlarmBtn');
+        const statusMsg = document.getElementById('statusMessage');
+        const missionLayer = document.getElementById('missionLayer');
+        const mathMission = document.getElementById('mathMission');
+        const clickMission = document.getElementById('clickMission');
+
+        function updateTime() {
+            const now = new Date();
+            const h = String(now.getHours()).padStart(2, '0');
+            const m = String(now.getMinutes()).padStart(2, '0');
+            const s = String(now.getSeconds()).padStart(2, '0');
+            timeDisplay.textContent = `${h}:${m}:${s}`;
+
+            if (isAlarmRunning && !isAlarmActive) {
+                const currentTimeStr = `${h}:${m}`;
+                if (currentTimeStr === alarmTime) {
+                    triggerAlarm();
+                }
+            }
+        }
+        setInterval(updateTime, 1000);
+
+        async function triggerAlarm() {
+            isAlarmActive = true;
+            document.body.classList.add('alarm-active');
+            missionLayer.style.display = 'flex';
+            
+            // 미션 초기화
+            startMathMission();
+
+            // 오디오 시작
+            await Tone.start();
+            synth = new Tone.PolySynth(Tone.Synth).toDestination();
+            
+            alarmInterval = setInterval(() => {
+                const now = Tone.now();
+                synth.triggerAttackRelease(["C4", "E4", "G4"], "8n", now);
+                synth.triggerAttackRelease(["C5", "E5", "G5"], "8n", now + 0.25);
+            }, 500);
+        }
+
+        function stopAlarm() {
+            clearInterval(alarmInterval);
+            isAlarmActive = false;
+            isAlarmRunning = false;
+            document.body.classList.remove('alarm-active');
+            missionLayer.style.display = 'none';
+            statusMsg.textContent = "좋은 아침입니다! 알람이 해제되었습니다.";
+            setBtn.textContent = "새 알람 설정";
+            setBtn.classList.remove('bg-red-600');
+            setBtn.classList.add('bg-blue-600');
+        }
+
+        function startMathMission() {
+            mathQuestionsSolved = 0;
+            mathMission.classList.remove('hidden');
+            clickMission.classList.add('hidden');
+            generateMathQuestion();
+        }
+
+        function generateMathQuestion() {
+            document.getElementById('mathLeft').textContent = totalMathQuestions - mathQuestionsSolved;
+            const a = Math.floor(Math.random() * 50) + 10;
+            const b = Math.floor(Math.random() * 50) + 10;
+            const op = Math.random() > 0.5 ? '+' : '-';
+            const answer = op === '+' ? a + b : a - b;
+            
+            document.getElementById('mathQuestion').textContent = `${a} ${op} ${b} = ?`;
+            
+            const options = [answer];
+            while(options.length < 4) {
+                const wrong = answer + (Math.floor(Math.random() * 20) - 10);
+                if (!options.includes(wrong)) options.push(wrong);
+            }
+            options.sort(() => Math.random() - 0.5);
+
+            const optionsContainer = document.getElementById('mathOptions');
+            optionsContainer.innerHTML = '';
+            options.forEach(opt => {
+                const btn = document.createElement('button');
+                btn.className = "py-4 bg-slate-700 hover:bg-blue-600 rounded-xl font-bold transition-colors";
+                btn.textContent = opt;
+                btn.onclick = () => {
+                    if (opt === answer) {
+                        mathQuestionsSolved++;
+                        if (mathQuestionsSolved >= totalMathQuestions) {
+                            startClickMission();
+                        } else {
+                            generateMathQuestion();
+                        }
+                    } else {
+                        // 오답 시 흔들기 효과 (선택사항)
+                        btn.classList.add('bg-red-900');
+                        setTimeout(() => btn.classList.remove('bg-red-900'), 200);
+                    }
+                };
+                optionsContainer.appendChild(btn);
+            });
+        }
+
+        function startClickMission() {
+            mathMission.classList.add('hidden');
+            clickMission.classList.remove('hidden');
+            targetClicks = 0;
+            document.getElementById('clickCount').textContent = targetClicks;
+            moveTarget();
+        }
+
+        const targetCircle = document.getElementById('targetCircle');
+        const gameArea = document.getElementById('gameArea');
+
+        function moveTarget() {
+            const maxX = gameArea.clientWidth - targetCircle.clientWidth;
+            const maxY = gameArea.clientHeight - targetCircle.clientHeight;
+            const randomX = Math.floor(Math.random() * maxX);
+            const randomY = Math.floor(Math.random() * maxY);
+            
+            targetCircle.style.left = randomX + 'px';
+            targetCircle.style.top = randomY + 'px';
+        }
+
+        targetCircle.onclick = (e) => {
+            e.stopPropagation();
+            targetClicks++;
+            document.getElementById('clickCount').textContent = targetClicks;
+            if (targetClicks >= totalClicks) {
+                stopAlarm();
+            } else {
+                moveTarget();
+            }
+        };
+
+        setBtn.onclick = () => {
+            if (!isAlarmRunning) {
+                if (!alarmInput.value) {
+                    statusMsg.textContent = "시간을 먼저 선택해주세요!";
+                    return;
+                }
+                alarmTime = alarmInput.value;
+                isAlarmRunning = true;
+                statusMsg.textContent = `${alarmTime}에 미션 알람이 울립니다.`;
+                setBtn.textContent = "알람 취소하기";
+                setBtn.classList.remove('bg-blue-600');
+                setBtn.classList.add('bg-red-600');
+            } else {
+                isAlarmRunning = false;
+                statusMsg.textContent = "알람이 취소되었습니다.";
+                setBtn.textContent = "알람 시작하기";
+                setBtn.classList.remove('bg-red-600');
+                setBtn.classList.add('bg-blue-600');
+            }
+        };
+
+        // 초기 기본 시간 설정 (현재 시간 + 1분)
+        window.onload = () => {
+            const now = new Date();
+            now.setMinutes(now.getMinutes() + 1);
+            const h = String(now.getHours()).padStart(2, '0');
+            const m = String(now.getMinutes()).padStart(2, '0');
+            alarmInput.value = `${h}:${m}`;
+        };
+
+    </script>
+</body>
+</html>
